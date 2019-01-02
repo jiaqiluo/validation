@@ -8,13 +8,10 @@ namespace = {"p_client": None,
              "pv": None,
              "pvc": None}
 
-# this is the IP address of the NFS server
-NFS_SERVER = os.environ.get("RANCHER_NFS_SERVER", "")
-# this is the path to the mounted dir in the NFS server
-NFS_SERVER_MOUNT_PATH = os.environ.get('RANCHER_NFS_SERVER_MOUNT_PATH', "/nfs")
 # this is the path to the mounted dir in the pod(workload)
 MOUNT_PATH = os.environ.get('RANCHER_MOUNT_PATH', "/var/nfs")
-
+# this is the IP address of the NFS server
+NFS_SERVER = None
 
 def test_nfs_wl_deployment():
     p_client = namespace["p_client"]
@@ -149,14 +146,42 @@ def test_nfs_wl_daemonSet():
         for item in pods:
             validate_file_content(item, content, file_path)
 
+def create_nfs_server():
+    global NFS_SERVER
+    cmd = "sudo apt-get update;" \
+          "sudo apt-get install nfs-kernel-server;" \
+          "mkdir -p /nfs && chown nobody:nogroup /nfs;" \
+          "vi /etc/exports  ‹ /nfs    *(rw,sync,no_subtree_check);" \
+          "sudo exportfs -a;" \
+          "sudo service nfs-kernel-server start;" \
+          "sudo ufw allow 2049"
+    aws_nodes = AmazonWebServices().create_multiple_nodes(
+        1, random_test_name("nfs-server"))
+    AWS_NODE = aws_nodes[0]
+    AWS_NODE.execute_command(cmd)
+    NFS_SERVER = aws_nodes[0].public_ip_address
+
+
+def remove_nfs_server():
+    filters = [
+        {'Name': 'network-interface.addresses.association.public-ip',
+         'Values': [NFS_SERVER]}]
+    aws_nodes = AmazonWebServices().get_nodes(filters)
+    assert len(aws_nodes) == 1
+    AmazonWebServices().delete_nodes(aws_nodes)
+
 
 @pytest.fixture(scope="module", autouse="True")
 def create_project_client(request):
+    global NFS_SERVER
     client, cluster = get_admin_client_and_cluster()
     create_kubeconfig(cluster)
     p, ns = create_project_and_ns(ADMIN_TOKEN, cluster, "project-test-nfs")
     p_client = get_project_client_for_token(p, ADMIN_TOKEN)
 
+    create_nfs_server()
+    assert NFS_SERVER != None
+    print("NFS_SERVER: " + NFS_SERVER)
     # add  persistent volume to the cluster
     cluster_client = get_cluster_client_for_token(cluster, ADMIN_TOKEN)
     pv_name = random_test_name("pv")
@@ -165,7 +190,7 @@ def create_project_client(request):
                  "name": pv_name,
                  "nfs": {"readOnly": "false",
                          "type": "nfsvolumesource",
-                         "path": NFS_SERVER_MOUNT_PATH,
+                         "path": "/nfs",
                          "server": NFS_SERVER
                          },
                  "capacity": {"storage": "10Gi"}
@@ -195,4 +220,5 @@ def create_project_client(request):
                                                       ADMIN_TOKEN)
         cluster_client.delete(namespace["project"])
         cluster_client.delete(namespace["pv"])
+        remove_nfs_server()
     request.addfinalizer(fin)
