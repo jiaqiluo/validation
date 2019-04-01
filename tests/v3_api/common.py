@@ -587,12 +587,14 @@ def validate_cluster(client, cluster, intermediate_state="provisioning",
 
 
 def check_cluster_version(cluster, version):
+    # check if the passed-in version and the view-in-api version are the same
     cluster_k8s_version = \
         cluster.appliedSpec["rancherKubernetesEngineConfig"][
             "kubernetesVersion"]
     assert cluster_k8s_version == version, \
         "cluster_k8s_version: " + cluster_k8s_version + \
         " Expected: " + version
+    # check if the passed-in version and the kubectl-returned version are the same
     expected_k8s_version = version[:version.find("-")]
     k8s_version = execute_kubectl_cmd("version")
     kubectl_k8s_version = k8s_version["serverVersion"]["gitVersion"]
